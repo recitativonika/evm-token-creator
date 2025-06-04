@@ -10,7 +10,7 @@ Node.js script designed to interact with multiple EVM compatible blockchains. It
 - **Randomization and Delays:** Options to randomize the order of chains and wallets, and to add random delays between actions for better transaction management.
 
 ## Note
-- Costume delay, multiple RPC, costume restart time will added later.
+- Costum delay, costum burn amount, multiple RPC per chain, costume restart time will added later.
 
 ## Prerequisites
 
