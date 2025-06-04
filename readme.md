@@ -1,6 +1,6 @@
 # EVM Token Creator
 
-Node.js script designed to interact with multiple EVM compatible blockchains. It allows to check native token balances and deploy ERC-20 tokens using a simple Solidity smart contract. The script supports multiple wallets and chains, providing flexibility in managing and deploying tokens across different networks.
+Node.js script designed to interact with multiple EVM compatible blockchains. It allows to check native token balances and deploy ERC-20 tokens using a simple Solidity smart contract. 
 
 ## Features
 
