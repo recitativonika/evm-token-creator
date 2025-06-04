@@ -78,8 +78,8 @@ The script deploys a basic ERC-20 token contract with the following features:
 
 ## License
 
-This project is licensed under the MIT License. See the LICENSE file for details.
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
 ## Disclaimer
 
-This script is for educational purposes only. Use it at your own risk. Ensure you have the necessary permissions and comply with the terms of service of the blockchain networks you interact with.
+This script is for educational purposes only. Use it at your own risk.
