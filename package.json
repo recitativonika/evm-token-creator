@@ -1,9 +1,8 @@
 {
   "dependencies": {
     "dotenv": "^16.5.0",
-    "ethers": "^6.14.3",
-    "fs": "^0.0.1-security",
-    "inquirer": "^12.6.3",
+    "ethers": "^5.7.2",
+    "inquirer": "^8.2.4",
     "solc": "^0.8.30",
     "unique-names-generator": "^4.7.1"
   }
