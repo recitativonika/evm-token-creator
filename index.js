@@ -178,6 +178,51 @@ function generateTokenDetails() {
   return { tokenName, tokenSymbol };
 }
 
+const chainGasLimits = {
+  'MEGA Testnet': {
+    deployment: 3000000,
+    transfer: 100000
+  },
+  'Monad Testnet': {
+    deployment: 2500000,
+    transfer: 80000
+  },
+  'Recall Testnet': {
+    deployment: 2000000,
+    transfer: 70000
+  },
+  default: {
+    deployment: 2000000,
+    transfer: 70000
+  }
+};
+
+async function estimateGasWithFallback(contract, method, args, chainName, wallet, provider) {
+  const gasConfig = chainGasLimits[chainName] || chainGasLimits.default;
+
+  try {
+    const estimatedGas = await contract.estimateGas[method](...args);
+    const gasWithBuffer = estimatedGas.mul(120).div(100);
+    logInfo(`Gas estimated: ${estimatedGas.toString()}, using: ${gasWithBuffer.toString()}`);
+    return gasWithBuffer;
+  } catch (error) {
+    logInfo(`Auto gas estimation failed, using manual limit: ${gasConfig[method === 'deploy' ? 'deployment' : 'transfer']}`);
+    return ethers.BigNumber.from(gasConfig[method === 'deploy' ? 'deployment' : 'transfer']);
+  }
+}
+
+async function getGasPriceWithFallback(provider, chainName) {
+  try {
+    const gasPrice = await provider.getGasPrice();
+    const gasPriceWithBuffer = gasPrice.mul(110).div(100);
+    logInfo(`Gas price: ${ethers.utils.formatUnits(gasPriceWithBuffer, 'gwei')} gwei`);
+    return gasPriceWithBuffer;
+  } catch (error) {
+    logInfo('Failed to get gas price, using fallback');
+    return ethers.utils.parseUnits('20', 'gwei');
+  }
+}
+
 const contractCode = `
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
@@ -278,11 +323,33 @@ async function deployContractForWalletOnChain(privKey, chain, delayOptions, wall
     const initialSupply = ethers.utils.parseUnits(randomInt.toString(), 18);
 
     const factory = new ethers.ContractFactory(abi, bytecode, wallet);
-    const deployPromise = factory.deploy(tokenName, tokenSymbol, initialSupply);
-    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Deployment timeout')), 60000));
+
+    const gasPrice = await getGasPriceWithFallback(provider, chain.name);
+
+    const gasConfig = chainGasLimits[chain.name] || chainGasLimits.default;
+    let gasLimit;
+
+    try {
+      const estimatedGas = await factory.signer.estimateGas(factory.getDeployTransaction(tokenName, tokenSymbol, initialSupply));
+      gasLimit = estimatedGas.mul(120).div(100);
+      logInfo(`Gas estimated for deployment: ${estimatedGas.toString()}, using: ${gasLimit.toString()}`);
+    } catch (error) {
+      logInfo(`Auto gas estimation failed for deployment, using manual limit: ${gasConfig.deployment}`);
+      gasLimit = ethers.BigNumber.from(gasConfig.deployment);
+    }
+
+    const deployOptions = {
+      gasLimit: gasLimit,
+      gasPrice: gasPrice
+    };
+
+    logInfo(`Deploying with gas limit: ${gasLimit.toString()}, gas price: ${ethers.utils.formatUnits(gasPrice, 'gwei')} gwei`);
+
+    const deployPromise = factory.deploy(tokenName, tokenSymbol, initialSupply, deployOptions);
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Deployment timeout')), 120000));
     const contract = await Promise.race([deployPromise, timeoutPromise]);
     const deployTx = contract.deployTransaction;
-    const deployReceipt = await waitForTransactionWithTimeout(deployTx, 60000, 'Deployment transaction sent, waiting for confirmation');
+    const deployReceipt = await waitForTransactionWithTimeout(deployTx, 120000, 'Deployment transaction sent, waiting for confirmation');
 
     logSuccess(`Contract deployed at address: ${colored(contract.address, colors.magenta)}`);
     logInfo(`Token name: ${colored(tokenName, colors.cyan)}, Symbol: ${colored(tokenSymbol, colors.yellow)}, Initial supply: ${colored(randomInt + ' tokens', colors.green)}`);
@@ -295,8 +362,24 @@ async function deployContractForWalletOnChain(privKey, chain, delayOptions, wall
     if (includeSendBurn) {
       const percentage = Math.floor(Math.random() * 7900 + 100);
       const amountToTransfer = initialSupply.mul(percentage).div(10000);
-      const tx = await contract.transfer(contract.address, amountToTransfer);
-      await waitForTransactionWithTimeout(tx, 60000, 'Transfer transaction sent, waiting for confirmation');
+
+      let transferGasLimit;
+      try {
+        const estimatedTransferGas = await contract.estimateGas.transfer(contract.address, amountToTransfer);
+        transferGasLimit = estimatedTransferGas.mul(120).div(100);
+        logInfo(`Gas estimated for transfer: ${estimatedTransferGas.toString()}, using: ${transferGasLimit.toString()}`);
+      } catch (error) {
+        logInfo(`Auto gas estimation failed for transfer, using manual limit: ${gasConfig.transfer}`);
+        transferGasLimit = ethers.BigNumber.from(gasConfig.transfer);
+      }
+
+      const transferOptions = {
+        gasLimit: transferGasLimit,
+        gasPrice: gasPrice
+      };
+
+      const tx = await contract.transfer(contract.address, amountToTransfer, transferOptions);
+      await waitForTransactionWithTimeout(tx, 120000, 'Transfer transaction sent, waiting for confirmation');
       logSuccess(`Transferred ${colored(ethers.utils.formatUnits(amountToTransfer, 18), colors.green)} tokens to ${colored(contract.address, colors.magenta)}`);
       if (delayOptions.afterTransfer) {
         const delay = randomDelay();
@@ -435,7 +518,35 @@ async function deployContractForWalletOnChain(privKey, chain, delayOptions, wall
 
   if (randomizeWallets && actions.includes('createToken')) shuffle(wallets);
 
-  const isPeriodic = actions.includes('createToken');
+  let isPeriodicProcess = false;
+  let cycleDelayMinutes = 0;
+
+  const { shouldRestart } = await inquirer.prompt([{
+    type: 'confirm',
+    name: 'shouldRestart',
+    message: 'Do you want the process to restart automatically after a full cycle?',
+    default: false
+  }]);
+
+  isPeriodicProcess = shouldRestart;
+
+  if (isPeriodicProcess) {
+    const { delayInMinutes } = await inquirer.prompt([{
+      type: 'input',
+      name: 'delayInMinutes',
+      message: 'Enter the delay between cycles (in minutes):',
+      validate: input => {
+        const num = parseFloat(input);
+        if (isNaN(num) || num <= 0) {
+          return 'Please enter a positive number for minutes.';
+        }
+        return true;
+      },
+      filter: Number
+    }]);
+    cycleDelayMinutes = delayInMinutes;
+  }
+
   while (true) {
     for (const wallet of wallets) {
       const privKey = wallet.key;
@@ -489,9 +600,28 @@ async function deployContractForWalletOnChain(privKey, chain, delayOptions, wall
             }
             const percentage = Math.floor(Math.random() * 7900 + 100);
             const amountToTransfer = balance.mul(percentage).div(10000);
+
+            const gasPrice = await getGasPriceWithFallback(provider, chain.name);
+            const gasConfig = chainGasLimits[chain.name] || chainGasLimits.default;
+            let transferGasLimit;
+
             try {
-              const tx = await tokenContract.transfer(tokenAddress, amountToTransfer);
-              await waitForTransactionWithTimeout(tx, 60000);
+              const estimatedTransferGas = await tokenContract.estimateGas.transfer(tokenAddress, amountToTransfer);
+              transferGasLimit = estimatedTransferGas.mul(120).div(100);
+              logInfo(`Gas estimated for transfer: ${estimatedTransferGas.toString()}, using: ${transferGasLimit.toString()}`);
+            } catch (error) {
+              logInfo(`Auto gas estimation failed for transfer, using manual limit: ${gasConfig.transfer}`);
+              transferGasLimit = ethers.BigNumber.from(gasConfig.transfer);
+            }
+
+            const transferOptions = {
+              gasLimit: transferGasLimit,
+              gasPrice: gasPrice
+            };
+
+            try {
+              const tx = await tokenContract.transfer(tokenAddress, amountToTransfer, transferOptions);
+              await waitForTransactionWithTimeout(tx, 120000);
               logSuccess(`Transferred ${colored(ethers.utils.formatUnits(amountToTransfer, 18), colors.green)} tokens to ${colored(tokenAddress, colors.magenta)}`);
             } catch (error) {
               logError(`Error transferring tokens: ${formatError(error)}`);
@@ -503,10 +633,14 @@ async function deployContractForWalletOnChain(privKey, chain, delayOptions, wall
       }
     }
 
-    if (!isPeriodic) break;
+    if (!isPeriodicProcess) {
+      logHeader("===== Process complete. Exiting. =====");
+      break;
+    }
 
-    const waitTime = (2 + Math.random()) * 24 * 3600 * 1000;
+    const waitTime = cycleDelayMinutes * 60 * 1000;
     const endTime = Date.now() + waitTime;
+    logInfo(`Full cycle complete. Waiting for ${cycleDelayMinutes} minute(s) before starting the next cycle.`);
     while (Date.now() < endTime) {
       const remaining = endTime - Date.now();
       const formatted = formatCycleWaitTime(remaining);
