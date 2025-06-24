@@ -9,9 +9,6 @@ Node.js script designed to interact with multiple EVM compatible blockchains. It
 - **Optional Token Transfer/Burn:** After deployment, optionally transfer a random percentage of the tokens to the contract address (effectively burning them).
 - **Randomization and Delays:** Options to randomize the order of chains and wallets, and to add random delays between actions for better transaction management.
 
-## Note
-- Costum delay, costum burn amount, multiple RPC per chain, costume restart time will added later.
-
 ## Prerequisites
 
 - Node.js (v14 or higher recommended)
